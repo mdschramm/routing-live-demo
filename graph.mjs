@@ -12,6 +12,7 @@ const State = Annotation.Root({
   columns: Annotation(), // CSV header
   allHospitals: Annotation(), // cached at conversation start, sorted left-to-right
   filtered: Annotation(), // narrowed subset; filter() preserves order so it stays sorted
+  intent: Annotation(), // "filter" | "question", set by router
   transcript: Annotation(), // [{role, text}] overwritten each delegation
   messages: MessagesAnnotation.spec.messages,
 });
@@ -32,11 +33,12 @@ function buildGraph({ model, filterModel }) {
   const llm = new ChatOpenAI({ model });
   const filterLlm = new ChatOpenAI({ model: filterModel });
 
-  const speak = (promptName) => async (state) => {
+  const speak = (promptName, { listRows = 0 } = {}) => async (state) => {
     const system = await getPrompt(promptName);
     const context = [
       `Conversation:\n${transcriptText(state.transcript)}`,
       `Matching options (${state.filtered.length} rows):\n${describe(state.filtered, state.columns)}`,
+      listRows ? `Rows (up to ${listRows}):\n${state.filtered.slice(0, listRows).map((r) => state.columns.map((c) => r[c]).join(" | ")).join("\n")}` : "",
       state.filtered.length === 1 || sameRow(state.columns, state.filtered[0], state.filtered.at(-1))
         ? `The single match: ${JSON.stringify(state.filtered[0])}`
         : "",
@@ -46,6 +48,16 @@ function buildGraph({ model, filterModel }) {
   };
 
   return new StateGraph(State)
+    .addNode("router", async (state) => {
+      // Safety net if /api/conversation/start didn't run first.
+      const base = state.allHospitals ? {} : await loadState();
+      const prompt = await getPrompt("router_system");
+      const { intent } = await filterLlm
+        .withStructuredOutput(z.object({ intent: z.enum(["filter", "question"]) }))
+        .invoke([new SystemMessage(prompt), new HumanMessage(transcriptText(state.transcript))]);
+      console.log("Router intent:", intent);
+      return { ...base, intent };
+    })
     .addNode("filter", async (state) => {
       // Safety net if /api/conversation/start didn't run first.
       const base = state.allHospitals ? {} : await loadState();
@@ -72,7 +84,10 @@ function buildGraph({ model, filterModel }) {
     })
     .addNode("proposal", speak("proposal_system"))
     .addNode("ask", speak("ask_system"))
-    .addEdge(START, "filter")
+    .addNode("answer", speak("answer_system", { listRows: 50 }))
+    .addEdge(START, "router")
+    .addConditionalEdges("router", (state) => (state.intent === "question" ? "answer" : "filter"))
+    .addEdge("answer", END)
     // Rows are sorted, so "all remaining rows identical" is first === last.
     .addConditionalEdges("filter", (state) =>
       state.filtered.length && sameRow(state.columns, state.filtered[0], state.filtered.at(-1)) ? "proposal" : "ask",
@@ -90,7 +105,7 @@ export async function startConversation(sessionId, models) {
   return state.allHospitals.length;
 }
 
-// Yields spoken text chunks from the proposal/ask nodes as they stream.
+// Yields spoken text chunks from the proposal/ask/answer nodes as they stream.
 export async function* runDelegation(transcript, { sessionId, model, filterModel, signal }) {
   console.log("Running delegation", { model, filterModel, sessionId, turns: transcript.length });
   const t0 = performance.now();
@@ -106,7 +121,7 @@ export async function* runDelegation(transcript, { sessionId, model, filterModel
     { configurable: { thread_id: sessionId }, streamMode: "messages", signal },
   );
   for await (const [chunk, meta] of stream) {
-    if (!["proposal", "ask"].includes(meta.langgraph_node)) continue;
+    if (!["proposal", "ask", "answer"].includes(meta.langgraph_node)) continue;
     if (typeof chunk.content === "string" && chunk.content) {
       if (ttft === undefined) {
         ttft = performance.now() - t1;
