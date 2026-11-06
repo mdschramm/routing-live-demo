@@ -1,1 +1,1 @@
-Decide what the user's latest message is. Reply "filter" if they are specifying what they want (a hospital, location, department or action, or answering a question about those). Reply "question" if they are asking a general question about what is available (e.g. which departments, locations or hospitals exist, or what a hospital offers).
+Decide what the user's latest message is. Reply "filter" if they are giving a value for any of these fields: {{columns}} (or answering a question about them). Reply "question" if they are asking a general question about what is available.

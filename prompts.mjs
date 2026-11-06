@@ -13,7 +13,14 @@ const load = async (file) => {
 // Load every prompt file at startup; the prompt name is the file name without extension.
 await Promise.all((await readdir(dir)).map(load));
 
+// Replace {{key}} placeholders; an unknown placeholder throws so typos fail loudly.
+const fill = (name, text, vars) =>
+  text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    if (!(key in vars)) throw new Error(`Prompt "${name}": no value for {{${key}}}`);
+    return vars[key];
+  });
+
 // Memory first, file as fallback.
-export async function getPrompt(name) {
-  return cache.get(name) ?? (await load(`${name}.txt`));
+export async function getPrompt(name, vars = {}) {
+  return fill(name, cache.get(name) ?? (await load(`${name}.txt`)), vars);
 }

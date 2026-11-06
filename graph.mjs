@@ -11,6 +11,7 @@ const checkpointer = new MemorySaver();
 const State = Annotation.Root({
   columns: Annotation(), // CSV header
   filterColumns: Annotation(), // columns the user can filter on (excludes e.g. audio)
+  activeFilters: Annotation(), // {column: value} narrowed so far; cleared on rejection
   proposalMade: Annotation(), // true once proposal has spoken; router then sends the next turn to handleUserDecision
   windowStart: Annotation(), // transcript index of the latest rejection; earlier turns are ignored
   allHospitals: Annotation(), // cached at conversation start, sorted left-to-right
@@ -31,7 +32,7 @@ const describe = (rows, columns) =>
 async function loadState() {
   const data = await loadHospitals();
   const { columns, filterColumns, rows } = data ?? { columns: [], filterColumns: [], rows: [] };
-  return { columns, filterColumns, allHospitals: rows, filtered: rows, proposalMade: false, windowStart: 0 };
+  return { columns, filterColumns, allHospitals: rows, filtered: rows, proposalMade: false, windowStart: 0, activeFilters: {} };
 }
 
 function buildGraph({ model, filterModel }) {
@@ -39,7 +40,7 @@ function buildGraph({ model, filterModel }) {
   const filterLlm = new ChatOpenAI({ model: filterModel });
 
   const speak = (promptName, { listRows = 0 } = {}) => async (state) => {
-    const system = await getPrompt(promptName);
+    const system = await getPrompt(promptName, { columns: state.filterColumns.join(", ") });
     const context = [
       `Conversation:\n${transcriptText(windowed(state))}`,
       `Matching options (${state.filtered.length} rows):\n${describe(state.filtered, state.filterColumns)}`,
@@ -57,7 +58,7 @@ function buildGraph({ model, filterModel }) {
       // Safety net if /api/conversation/start didn't run first.
       const base = state.allHospitals ? {} : await loadState();
       if (state.proposalMade) return base;
-      const prompt = await getPrompt("router_system");
+      const prompt = await getPrompt("router_system", { columns: (state.filterColumns ?? base.filterColumns).join(", ") });
       const { intent } = await filterLlm
         .withStructuredOutput(z.object({ intent: z.enum(["filter", "question"]) }))
         .invoke([new SystemMessage(prompt), new HumanMessage(transcriptText(windowed(state)))]);
@@ -68,6 +69,7 @@ function buildGraph({ model, filterModel }) {
       const base = state.allHospitals ? {} : await loadState();
       const columns = state.filterColumns ?? base.filterColumns;
       let filtered = state.filtered ?? base.filtered;
+      const activeFilters = { ...(state.activeFilters ?? {}) };
       const shape = {};
       for (const [column, values] of Object.entries(uniqueValues(filtered, columns))) {
         if (values.length > 1) {
@@ -80,11 +82,14 @@ function buildGraph({ model, filterModel }) {
           .withStructuredOutput(z.object(shape))
           .invoke([new SystemMessage(prompt), new HumanMessage(transcriptText(windowed(state)))]);
         for (const [column, value] of Object.entries(picked)) {
-          if (value != null) filtered = filtered.filter((r) => r[column] === value);
+          if (value != null) {
+            filtered = filtered.filter((r) => r[column] === value);
+            activeFilters[column] = value;
+          }
         }
       }
       console.log(`Filtered rows: ${filtered.length}`);
-      return { ...base, filtered };
+      return { ...base, filtered, activeFilters };
     })
     .addNode("handleUserDecision", async (state) => {
       const row = state.filtered[0];
@@ -106,6 +111,7 @@ function buildGraph({ model, filterModel }) {
       const lastUser = state.transcript.findLastIndex((t) => t.role === "user");
       return {
         filtered: state.allHospitals,
+        activeFilters: {},
         proposalMade: false,
         windowStart: Math.max(lastUser, 0),
         messages: [new AIMessage("Okay, let's try again. What are you looking for?")],
@@ -129,6 +135,26 @@ function buildGraph({ model, filterModel }) {
     .compile({ checkpointer });
 }
 
+const SNAPSHOT_ROW_CAP = 500;
+
+// What the frontend shows: distinct remaining rows (rows are sorted, so duplicates are adjacent).
+export function snapshot(state) {
+  const columns = state.filterColumns ?? [];
+  const rows = [];
+  for (const row of state.filtered ?? []) {
+    const prev = rows.at(-1);
+    if (!prev || !sameRow(columns, prev, row)) rows.push(row);
+  }
+  return {
+    total: new Set((state.allHospitals ?? []).map((r) => columns.map((c) => r[c]).join("\u0000"))).size,
+    count: rows.length,
+    columns,
+    rows: rows.slice(0, SNAPSHOT_ROW_CAP).map((r) => Object.fromEntries(columns.map((c) => [c, r[c]]))),
+    filters: state.activeFilters ?? {},
+    proposalMade: !!state.proposalMade,
+  };
+}
+
 // Stub: the real version will play the clip for the accepted row.
 function playAudio(row) {
   console.log(`Would play audio: ${row.audio ?? "(no audio column)"}`);
@@ -139,7 +165,7 @@ export async function startConversation(sessionId, models) {
   const graph = buildGraph(models);
   const state = await loadState();
   await graph.updateState({ configurable: { thread_id: sessionId } }, state, START);
-  return state.allHospitals.length;
+  return snapshot(state);
 }
 
 // Yields spoken text chunks (strings) from proposal/ask/answer as they stream,
@@ -157,6 +183,9 @@ export async function* runDelegation(transcript, { sessionId, model, filterModel
     ttft = performance.now() - t1;
     console.log(`TTFT: ${ttft.toFixed(0)} ms (from graph.stream; ${(compileMs + ttft).toFixed(0)} ms incl. compile) via ${node}`);
   };
+  const config = { configurable: { thread_id: sessionId } };
+  // Running copy of state, so snapshots don't depend on checkpoint timing.
+  const local = { ...((await graph.getState(config)).values ?? {}) };
   const stream = await graph.stream(
     { transcript },
     { configurable: { thread_id: sessionId }, streamMode: ["messages", "updates"], signal },
@@ -169,7 +198,14 @@ export async function* runDelegation(transcript, { sessionId, model, filterModel
         first(meta.langgraph_node);
         yield chunk.content;
       }
-    } else if (data.handleUserDecision) {
+    } else {
+      for (const update of Object.values(data)) {
+        const { messages, ...rest } = update ?? {};
+        Object.assign(local, rest);
+      }
+      if (local.filtered && (data.filter || data.handleUserDecision || data.proposal)) yield { state: snapshot(local) };
+    }
+    if (mode === "updates" && data.handleUserDecision) {
       const message = data.handleUserDecision.messages[0];
       first("handleUserDecision");
       if (message.content) yield message.content;
