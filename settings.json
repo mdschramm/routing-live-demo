@@ -1,0 +1,9 @@
+{
+  "model": "gpt-5-nano",
+  "delegation": {
+    "transcriptTurns": 2,
+    "settleWaitMs": 300,
+    "acknowledgementDelayMs": null
+  },
+  "transcript": { "saveToFile": true, "dir": "transcripts" }
+}

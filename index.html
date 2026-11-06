@@ -28,6 +28,100 @@ let closeTimeout;
 let ready = false;
 let finalized = false;
 
+// Live transcript: [{ role: "user" | "agent", text, startMs, endMs }]
+let transcript = [];
+let sessionId;
+let settings;
+let current; // { id, abort } for the latest delegation
+
+function addTranscript(role, event) {
+  const last = transcript.at(-1);
+  if (last?.role === role) {
+    last.text += event.delta;
+    last.endMs = event.end_ms;
+  } else {
+    transcript.push({ role, text: event.delta, startMs: event.start_ms, endMs: event.end_ms });
+  }
+}
+
+const post = (url, body) =>
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+function sendCommentary(delegationId, content) {
+  if (events?.readyState !== "open") return;
+  events.send(
+    JSON.stringify({
+      type: "session.commentary.append",
+      event_id: crypto.randomUUID(),
+      delegation_id: delegationId,
+      content,
+    }),
+  );
+}
+
+async function handleDelegation(id) {
+  current?.abort.abort();
+  const abort = new AbortController();
+  current = { id, abort };
+  const { transcriptTurns, settleWaitMs, acknowledgementDelayMs } = settings.delegation;
+  if (acknowledgementDelayMs != null) {
+    // Empty thinking append suppresses the automatic acknowledgment.
+    events.send(
+      JSON.stringify({
+        type: "session.thinking.append",
+        event_id: crypto.randomUUID(),
+        delegation_id: id,
+        content: "",
+      }),
+    );
+  }
+  await new Promise((r) => setTimeout(r, settleWaitMs));
+  if (current.id !== id) return;
+  const turns = transcript
+    .filter((t) => t.role === "user")
+    .slice(-transcriptTurns)
+    .map((t) => t.text.trim());
+  if (!turns.length) return;
+  try {
+    const response = await post("/api/delegate", { turns });
+    abort.signal.addEventListener("abort", () => response.body?.cancel());
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let sse = "";
+    let pending = "";
+    const flush = () => {
+      const parts = pending.split(/(?<=[.!?])\s+/);
+      pending = parts.pop();
+      for (const part of parts) {
+        if (part.trim() && current?.id === id) sendCommentary(id, part.trim());
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      sse += decoder.decode(value, { stream: true });
+      const frames = sse.split("\n\n");
+      sse = frames.pop();
+      for (const frame of frames) {
+        const data = frame.match(/^data: (.*)$/m)?.[1];
+        if (frame.startsWith("event: error")) console.error("Delegation error", data);
+        else if (data && !frame.startsWith("event: done")) {
+          pending += JSON.parse(data).text ?? "";
+          flush();
+        }
+      }
+    }
+    pending = pending.trim();
+    if (pending && current?.id === id) sendCommentary(id, pending);
+  } catch (error) {
+    if (!abort.signal.aborted) console.error("Delegation failed", error);
+  }
+}
+
 function cleanup() {
   clearTimeout(closeTimeout);
   microphone?.getTracks().forEach((track) => track.stop());
@@ -45,7 +139,9 @@ start.addEventListener("click", async () => {
   start.disabled = true;
   finalized = false;
   status.textContent = "Connecting…";
+  transcript = [];
   try {
+    settings = await (await fetch("/api/settings")).json();
     const connection = new RTCPeerConnection();
     peer = connection;
     connection.addEventListener("track", (event) => {
@@ -65,14 +161,24 @@ start.addEventListener("click", async () => {
     events.addEventListener("message", ({ data }) => {
       const event = JSON.parse(data);
       if (event.type === "session.started") {
+        sessionId = event.session.id;
         ready = true;
         stop.disabled = false;
         status.textContent = "Connected: " + event.session.id;
       } else if (event.type === "session.closed") {
         finalized = true;
         console.log("Final session usage", event.usage);
+        if (sessionId && transcript.length) {
+          post("/api/transcript", { sessionId, turns: transcript }).catch(console.error);
+        }
         status.textContent = "Conversation ended.";
         cleanup();
+      } else if (event.type === "session.input_transcript.delta") {
+        addTranscript("user", event);
+      } else if (event.type === "session.output_transcript.delta") {
+        addTranscript("agent", event);
+      } else if (event.type === "session.delegation.created") {
+        handleDelegation(event.delegation.id);
       } else {
         // Save transcript and nested Responses events as needed by your app.
         console.log(event);

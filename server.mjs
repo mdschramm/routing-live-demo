@@ -1,6 +1,8 @@
 import express from "express";
 import OpenAI from "openai";
-import { readFile } from "node:fs/promises";
+import { runDelegation } from "./graph.mjs";
+import { getPrompt } from "./prompts.mjs";
+import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 process.loadEnvFile(".env");
@@ -11,7 +13,12 @@ const port = 3000;
 const origin = `http://localhost:${port}`;
 const indexPath = resolve("index.html");
 
-app.use(express.json({ limit: "64kb" }));
+const settingsPath = resolve("settings.json");
+async function loadSettings() {
+  return JSON.parse(await readFile(settingsPath, "utf8"));
+}
+
+app.use(express.json({ limit: "1mb" }));
 app.get("/", async (_request, response) => {
   response.type("html").send(await readFile(indexPath, "utf8"));
 });
@@ -33,20 +40,14 @@ app.post("/api/session", async (request, response) => {
   }
 
   try {
+    const ackDelay = (await loadSettings()).delegation?.acknowledgementDelayMs;
     const result = await client.live.create({
       session: {
         model: "gpt-live-1",
-        instructions:
-          "Be concise. Delegate requests needing current information to the backend, which can search the web.",
+        instructions: await getPrompt("live_instructions"),
         delegation: {
-          type: "responses",
-          responses: {
-            model: "gpt-5.6-terra",
-            instructions:
-              "Use web search when current facts are needed. Return concise, grounded results for a spoken conversation.",
-            tools: [{ type: "web_search" }],
-            tool_choice: "auto",
-          },
+          type: "client",
+          ...(ackDelay != null && { acknowledgement_delay_ms: ackDelay }),
         },
       },
       transport: {
@@ -63,6 +64,65 @@ app.post("/api/session", async (request, response) => {
       .status(error.status ?? 502)
       .json({ error: "Live session creation failed" });
   }
+});
+
+
+const sameOrigin = (request, response) => {
+  if (request.headers.origin === origin) return true;
+  response.status(403).json({ error: "Unexpected request origin" });
+  return false;
+};
+
+app.get("/api/settings", async (_request, response) => {
+  response.json(await loadSettings());
+});
+
+app.post("/api/delegate", async (request, response) => {
+  if (!sameOrigin(request, response)) return;
+  const turns = request.body?.turns;
+  if (!Array.isArray(turns) || !turns.length || !turns.every((t) => typeof t === "string" && t.trim())) {
+    response.status(400).json({ error: "turns must be a non-empty array of strings" });
+    return;
+  }
+  const settings = await loadSettings();
+  const model = process.env.STUB_MODEL ?? settings.model;
+  const controller = new AbortController();
+  response.on("close", () => controller.abort());
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  try {
+    for await (const text of runDelegation(turns, { model, signal: controller.signal })) {
+      response.write(`data: ${JSON.stringify({ text })}\n\n`);
+    }
+    response.write("event: done\ndata: {}\n\n");
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      console.error("Delegation failed", error.message);
+      response.write(`event: error\ndata: ${JSON.stringify({ error: "Delegation failed" })}\n\n`);
+    }
+  }
+  response.end();
+});
+
+app.post("/api/transcript", async (request, response) => {
+  if (!sameOrigin(request, response)) return;
+  const { transcript: cfg } = await loadSettings();
+  const { sessionId, turns } = request.body ?? {};
+  if (!cfg?.saveToFile) return void response.status(204).end();
+  if (typeof sessionId !== "string" || !/^[\w-]+$/.test(sessionId) || !Array.isArray(turns)) {
+    response.status(400).json({ error: "sessionId and turns are required" });
+    return;
+  }
+  const dir = resolve(cfg.dir ?? "transcripts");
+  await mkdir(dir, { recursive: true });
+  await appendFile(
+    resolve(dir, `${sessionId}.jsonl`),
+    turns.map((t) => JSON.stringify(t)).join("\n") + "\n",
+  );
+  response.status(204).end();
 });
 
 app.listen(port, "127.0.0.1", () => console.log(`Open ${origin} (OPENAI_API_KEY ${process.env.OPENAI_API_KEY ? "loaded" : "missing"})`));
