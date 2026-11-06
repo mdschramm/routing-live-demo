@@ -4,6 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GPT-Live connection</title>
+    <style>
+      #hospitals-panel { max-height: 300px; overflow: auto; border: 1px solid #ccc; margin-top: 8px; }
+      #hospitals-panel table { border-collapse: collapse; width: 100%; font-size: 14px; }
+      #hospitals-panel th, #hospitals-panel td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; }
+      #hospitals-panel th { position: sticky; top: 0; background: #f5f5f5; }
+    </style>
   </head>
   <body>
     <script type="module">
@@ -246,6 +252,71 @@ stop.addEventListener("click", () => {
     cleanup();
   }, 15_000);
 });
+
+// ---- Hospitals CSV upload + preview ----
+const fileInput = document.createElement("input");
+fileInput.type = "file";
+fileInput.accept = ".csv,text/csv";
+const upload = document.createElement("button");
+upload.textContent = "Upload CSV (replaces table)";
+const uploadStatus = document.createElement("p");
+const panel = document.createElement("div");
+panel.id = "hospitals-panel";
+panel.hidden = true;
+document.body.append(document.createElement("hr"), fileInput, upload, uploadStatus, panel);
+
+async function refreshHospitals() {
+  const response = await fetch("/api/hospitals");
+  if (response.status === 204 || !response.ok) {
+    panel.hidden = true;
+    panel.replaceChildren();
+    return;
+  }
+  const { rows } = await response.json();
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  for (const column of ["name", "location", "action"]) {
+    head.appendChild(document.createElement("th")).textContent = column;
+  }
+  const body = table.createTBody();
+  for (const row of rows) {
+    const tr = body.insertRow();
+    for (const column of ["name", "location", "action"]) {
+      tr.insertCell().textContent = row[column];
+    }
+  }
+  panel.replaceChildren(table);
+  panel.hidden = false;
+  uploadStatus.textContent = uploadStatus.textContent || rows.length + " rows";
+}
+
+upload.addEventListener("click", async () => {
+  const file = fileInput.files[0];
+  if (!file) {
+    uploadStatus.textContent = "Choose a CSV file first.";
+    return;
+  }
+  if (!confirm("This replaces the entire hospitals table. Continue?")) return;
+  uploadStatus.textContent = "Uploading…";
+  try {
+    const response = await fetch("/api/hospitals", {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: await file.text(),
+    });
+    if (!response.ok) {
+      const message = await response.json().then((j) => j.error, () => response.statusText);
+      throw new Error(message);
+    }
+    const { count } = await response.json();
+    uploadStatus.textContent = "Uploaded " + count + " rows.";
+    await refreshHospitals();
+  } catch (error) {
+    uploadStatus.textContent = "Upload failed: " + (error instanceof Error ? error.message : error);
+  }
+});
+
+refreshHospitals().catch(console.error);
     </script>
   </body>
 </html>

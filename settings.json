@@ -5,5 +5,11 @@
     "settleWaitMs": 300,
     "acknowledgementDelayMs": null
   },
-  "transcript": { "saveToFile": true, "dir": "transcripts" }
+  "transcript": {
+    "saveToFile": true,
+    "dir": "transcripts"
+  },
+  "hospitals": {
+    "path": "data/hospitals.csv"
+  }
 }

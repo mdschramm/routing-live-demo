@@ -2,10 +2,12 @@ import express from "express";
 import OpenAI from "openai";
 import { runDelegation } from "./graph.mjs";
 import { getPrompt } from "./prompts.mjs";
+import { seedHospitals, saveHospitalsCsv, loadHospitals } from "./hospitals.mjs";
 import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 process.loadEnvFile(".env");
+await seedHospitals();
 
 const app = express();
 const client = new OpenAI({ maxRetries: 0 });
@@ -76,6 +78,35 @@ const sameOrigin = (request, response) => {
 app.get("/api/settings", async (_request, response) => {
   response.json(await loadSettings());
 });
+
+app.get("/api/hospitals", async (_request, response) => {
+  try {
+    const rows = await loadHospitals();
+    if (!rows) return void response.status(204).end();
+    response.json({ rows });
+  } catch (error) {
+    console.error("Hospitals load failed", error.message);
+    response.status(500).json({ error: "Stored hospitals.csv is invalid" });
+  }
+});
+
+app.post(
+  "/api/hospitals",
+  express.text({ type: "text/csv", limit: "1mb" }),
+  async (request, response) => {
+    if (!sameOrigin(request, response)) return;
+    if (typeof request.body !== "string" || !request.body.trim()) {
+      response.status(400).json({ error: "A text/csv body is required" });
+      return;
+    }
+    try {
+      response.json({ count: await saveHospitalsCsv(request.body) });
+    } catch (error) {
+      if (error.status !== 400) throw error;
+      response.status(400).json({ error: error.message });
+    }
+  },
+);
 
 app.post("/api/delegate", async (request, response) => {
   if (!sameOrigin(request, response)) return;
