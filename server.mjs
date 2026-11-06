@@ -146,8 +146,9 @@ app.post("/api/delegate", async (request, response) => {
     Connection: "keep-alive",
   });
   try {
-    for await (const text of runDelegation(transcript, { sessionId, model, filterModel: settings.filterModel, signal: controller.signal })) {
-      response.write(`data: ${JSON.stringify({ text })}\n\n`);
+    for await (const item of runDelegation(transcript, { sessionId, model, filterModel: settings.filterModel, signal: controller.signal })) {
+      if (typeof item === "string") response.write(`data: ${JSON.stringify({ text: item })}\n\n`);
+      else response.write("event: end\ndata: {}\n\n");
     }
     response.write("event: done\ndata: {}\n\n");
   } catch (error) {

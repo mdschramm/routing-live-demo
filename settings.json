@@ -11,6 +11,8 @@
     "dir": "transcripts"
   },
   "hospitals": {
-    "path": "data/hospitals.csv"
-  }
+    "path": "data/hospitals.csv",
+    "nonFilterableColumns": ["audio"]
+  },
+  "audio": { "model": "gpt-4o-mini-tts", "voice": "alloy", "dir": "data/audio" }
 }

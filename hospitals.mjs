@@ -72,5 +72,8 @@ export async function saveHospitalsCsv(text) {
 export async function loadHospitals() {
   const target = await dataPath();
   if (!(await exists(target))) return null;
-  return parseRows(await readFile(target, "utf8"));
+  const { columns, rows } = parseRows(await readFile(target, "utf8"));
+  const settings = JSON.parse(await readFile(resolve("settings.json"), "utf8"));
+  const hidden = settings.hospitals?.nonFilterableColumns ?? [];
+  return { columns, filterColumns: columns.filter((c) => !hidden.includes(c)), rows };
 }
