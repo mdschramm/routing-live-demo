@@ -100,7 +100,7 @@ function buildGraph({ model, filterModel }) {
         playAudio(row);
         return {
           proposalMade: false,
-          messages: [new AIMessage({ content: "Transferring you now.", additional_kwargs: { end: true } })],
+          messages: [new AIMessage({ content: "", additional_kwargs: { end: true, audio: row.audio ?? null } })],
         };
       }
       const lastUser = state.transcript.findLastIndex((t) => t.role === "user");
@@ -143,7 +143,7 @@ export async function startConversation(sessionId, models) {
 }
 
 // Yields spoken text chunks (strings) from proposal/ask/answer as they stream,
-// the fixed reply from handleUserDecision, and {end: true} once a proposal is accepted.
+// the fixed reply from handleUserDecision, and {end, audio} once a proposal is accepted.
 export async function* runDelegation(transcript, { sessionId, model, filterModel, signal }) {
   const t0 = performance.now();
   // Rebuilt per call so settings.json / STUB_MODEL changes apply immediately.
@@ -172,8 +172,8 @@ export async function* runDelegation(transcript, { sessionId, model, filterModel
     } else if (data.handleUserDecision) {
       const message = data.handleUserDecision.messages[0];
       first("handleUserDecision");
-      yield message.content;
-      if (message.additional_kwargs?.end) yield { end: true };
+      if (message.content) yield message.content;
+      if (message.additional_kwargs?.end) yield { end: true, audio: message.additional_kwargs.audio };
     }
   }
 }

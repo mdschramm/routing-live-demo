@@ -21,6 +21,7 @@ async function loadSettings() {
 }
 
 app.use(express.json({ limit: "1mb" }));
+app.use("/audio", express.static(resolve("data/audio")));
 app.get("/", async (_request, response) => {
   response.type("html").send(await readFile(indexPath, "utf8"));
 });
@@ -148,7 +149,7 @@ app.post("/api/delegate", async (request, response) => {
   try {
     for await (const item of runDelegation(transcript, { sessionId, model, filterModel: settings.filterModel, signal: controller.signal })) {
       if (typeof item === "string") response.write(`data: ${JSON.stringify({ text: item })}\n\n`);
-      else response.write("event: end\ndata: {}\n\n");
+      else response.write(`event: end\ndata: ${JSON.stringify({ audio: item.audio })}\n\n`);
     }
     response.write("event: done\ndata: {}\n\n");
   } catch (error) {

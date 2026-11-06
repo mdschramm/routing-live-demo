@@ -100,6 +100,7 @@ async function handleDelegation(id) {
     let sse = "";
     let pending = "";
     let endAfter = false;
+    let endAudio;
     const flush = () => {
       const parts = pending.split(/(?<=[.!?])\s+/);
       pending = parts.pop();
@@ -115,7 +116,10 @@ async function handleDelegation(id) {
       sse = frames.pop();
       for (const frame of frames) {
         const data = frame.match(/^data: (.*)$/m)?.[1];
-        if (frame.startsWith("event: end")) endAfter = true;
+        if (frame.startsWith("event: end")) {
+          endAfter = true;
+          endAudio = JSON.parse(data).audio;
+        }
         else if (frame.startsWith("event: error")) console.error("Delegation error", data);
         else if (data && !frame.startsWith("event: done")) {
           pending += JSON.parse(data).text ?? "";
@@ -125,8 +129,11 @@ async function handleDelegation(id) {
     }
     pending = pending.trim();
     if (pending && current?.id === id) sendCommentary(id, pending);
-    // Proposal accepted: close the conversation (pending speech drains first).
-    if (endAfter && current?.id === id) stop.click();
+    // Proposal accepted: play the clip separately from the voice agent, then end the call.
+    if (endAfter && current?.id === id) {
+      if (endAudio) new Audio("/" + endAudio).play().catch((e) => console.error("Clip failed", e));
+      stop.click();
+    }
   } catch (error) {
     if (!abort.signal.aborted) console.error("Delegation failed", error);
   }
