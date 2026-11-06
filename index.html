@@ -88,12 +88,12 @@ async function handleDelegation(id) {
   await new Promise((r) => setTimeout(r, settleWaitMs));
   if (current.id !== id) return;
   const turns = transcript
-    .filter((t) => t.role === "user")
-    .slice(-transcriptTurns)
-    .map((t) => t.text.trim());
-  if (!turns.length) return;
+    .filter((t) => t.text.trim())
+    .map((t) => ({ role: t.role, text: t.text.trim() }))
+    .slice(transcriptTurns == null ? 0 : -transcriptTurns);
+  if (!turns.some((t) => t.role === "user")) return;
   try {
-    const response = await post("/api/delegate", { turns });
+    const response = await post("/api/delegate", { sessionId, transcript: turns });
     abort.signal.addEventListener("abort", () => response.body?.cancel());
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -169,6 +169,7 @@ start.addEventListener("click", async () => {
       if (event.type === "session.started") {
         sessionId = event.session.id;
         ready = true;
+        post("/api/conversation/start", { sessionId }).catch(console.error);
         stop.disabled = false;
         status.textContent = "Connected: " + event.session.id;
       } else if (event.type === "session.closed") {
@@ -272,16 +273,16 @@ async function refreshHospitals() {
     panel.replaceChildren();
     return;
   }
-  const { rows } = await response.json();
+  const { columns, rows } = await response.json();
   const table = document.createElement("table");
   const head = table.createTHead().insertRow();
-  for (const column of ["name", "location", "action"]) {
+  for (const column of columns) {
     head.appendChild(document.createElement("th")).textContent = column;
   }
   const body = table.createTBody();
   for (const row of rows) {
     const tr = body.insertRow();
-    for (const column of ["name", "location", "action"]) {
+    for (const column of columns) {
       tr.insertCell().textContent = row[column];
     }
   }

@@ -2,7 +2,6 @@ import { readFile, writeFile, rename, copyFile, mkdir, access } from "node:fs/pr
 import { resolve, dirname } from "node:path";
 import { parse } from "csv-parse/sync";
 
-const COLUMNS = ["name", "location", "action"];
 const MAX_ROWS = 10_000;
 const samplePath = resolve("hospitals.csv");
 
@@ -15,17 +14,33 @@ const exists = (p) => access(p).then(() => true, () => false);
 
 function parseRows(text) {
   const rows = parse(text, { columns: true, skip_empty_lines: true, trim: true, bom: true });
-  const header = Object.keys(rows[0] ?? {});
-  if (COLUMNS.some((c, i) => header[i] !== c) || header.length !== COLUMNS.length) {
-    throw new Error(`Header must be exactly: ${COLUMNS.join(",")}`);
-  }
+  const columns = Object.keys(rows[0] ?? {});
+  if (!columns.length || columns.some((c) => !c)) throw new Error("Header must have non-empty column names");
+  if (new Set(columns).size !== columns.length) throw new Error("Header has duplicate column names");
   if (rows.length > MAX_ROWS) throw new Error(`Too many rows (max ${MAX_ROWS})`);
   rows.forEach((row, i) => {
-    for (const c of COLUMNS) {
+    for (const c of columns) {
       if (!row[c]) throw new Error(`Row ${i + 2}: "${c}" is empty`);
     }
   });
-  return rows;
+  // Sorted left-to-right by column so duplicates are adjacent.
+  rows.sort(compareRows(columns));
+  return { columns, rows };
+}
+
+export const compareRows = (columns) => (a, b) => {
+  for (const c of columns) {
+    const d = a[c].localeCompare(b[c]);
+    if (d) return d;
+  }
+  return 0;
+};
+
+export const sameRow = (columns, a, b) => columns.every((c) => a[c] === b[c]);
+
+// { column: [distinct values] } for the given rows.
+export function uniqueValues(rows, columns) {
+  return Object.fromEntries(columns.map((c) => [c, [...new Set(rows.map((r) => r[c]))]]));
 }
 
 // Copy the sample ./hospitals.csv into data/ only if data/ has no file yet.
@@ -40,7 +55,7 @@ export async function seedHospitals() {
 export async function saveHospitalsCsv(text) {
   let rows;
   try {
-    rows = parseRows(text);
+    ({ rows } = parseRows(text));
   } catch (error) {
     throw Object.assign(new Error(error.message), { status: 400 });
   }
@@ -53,7 +68,7 @@ export async function saveHospitalsCsv(text) {
   return rows.length;
 }
 
-// Parsed rows, or null if there is no file.
+// { columns, rows } (rows sorted), or null if there is no file.
 export async function loadHospitals() {
   const target = await dataPath();
   if (!(await exists(target))) return null;
