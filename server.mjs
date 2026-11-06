@@ -21,6 +21,8 @@ async function loadSettings() {
 }
 
 app.use(express.json({ limit: "1mb" }));
+app.use("/vendor/pico", express.static(resolve("node_modules/@picocss/pico/css")));
+app.use("/vendor/auto-animate", express.static(resolve("node_modules/@formkit/auto-animate")));
 app.use("/audio", express.static(resolve("data/audio")));
 app.get("/", async (_request, response) => {
   response.type("html").send(await readFile(indexPath, "utf8"));

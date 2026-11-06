@@ -4,21 +4,26 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GPT-Live connection</title>
+    <link rel="stylesheet" href="/vendor/pico/pico.min.css" />
     <style>
-      .scroll-panel { max-height: 300px; overflow: auto; border: 1px solid #ccc; margin-top: 8px; }
-      .scroll-panel table, #hospitals-panel table { border-collapse: collapse; width: 100%; font-size: 14px; }
-      .scroll-panel th, .scroll-panel td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; }
-      .scroll-panel th { position: sticky; top: 0; background: #f5f5f5; }
-      .chip { display: inline-block; background: #e8eefc; border-radius: 10px; padding: 2px 8px; margin: 2px; font-size: 13px; }
-      .badge { font-weight: 600; }
-      #hospitals-panel { max-height: 300px; overflow: auto; border: 1px solid #ccc; margin-top: 8px; }
-      #hospitals-panel table { border-collapse: collapse; width: 100%; font-size: 14px; }
-      #hospitals-panel th, #hospitals-panel td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; }
-      #hospitals-panel th { position: sticky; top: 0; background: #f5f5f5; }
+      .scroll-panel { max-height: 300px; overflow: auto; border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius); margin-top: 0.5rem; }
+      .scroll-panel table { margin: 0; font-size: 0.85rem; }
+      .scroll-panel th { position: sticky; top: 0; background: var(--pico-card-sectioning-background-color); z-index: 1; }
+      .scroll-panel td, .scroll-panel th { padding: 0.35rem 0.75rem; }
+      .chip { display: inline-block; background: var(--pico-primary-background); color: var(--pico-primary-inverse); border-radius: 1rem; padding: 0.1rem 0.7rem; margin: 0.15rem; font-size: 0.8rem; }
+      .badge { display: inline-block; font-weight: 600; padding: 0.1rem 0.6rem; border-radius: var(--pico-border-radius); background: var(--pico-card-sectioning-background-color); margin-right: 0.5rem; }
+      .badge.on { background: var(--pico-primary-background); color: var(--pico-primary-inverse); }
+      .flash { animation: flash 0.8s ease-out; }
+      @keyframes flash { from { box-shadow: 0 0 0 4px var(--pico-primary-focus); transform: scale(1.08); } to { box-shadow: 0 0 0 0 transparent; transform: scale(1); } }
+      .controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+      .controls button, .controls input { width: auto; margin: 0; }
+      audio { max-width: 100%; }
     </style>
   </head>
   <body>
+    <main class="container"><h1>GPT-Live hospital assistant</h1></main>
     <script type="module">
+      import autoAnimate from "/vendor/auto-animate/index.mjs";
       const start = document.createElement("button");
 start.textContent = "Start conversation";
 const stop = document.createElement("button");
@@ -28,17 +33,41 @@ const status = document.createElement("p");
 const audio = new Audio();
 audio.autoplay = true;
 audio.controls = true;
-document.body.append(start, stop, status, audio);
+const root = document.querySelector("main");
+const card = (title, ...children) => {
+  const article = document.createElement("article");
+  const header = document.createElement("header");
+  header.textContent = title;
+  article.append(header, ...children);
+  root.append(article);
+  return article;
+};
+const controls = document.createElement("div");
+controls.className = "controls";
+controls.append(start, stop);
+card("Conversation", controls, status, audio);
 
 // ---- Live conversation state panels ----
 const stateSection = document.createElement("div");
-stateSection.hidden = true;
 const stateSummary = document.createElement("p");
+const countBadge = document.createElement("span");
+countBadge.className = "badge";
+const proposalBadge = document.createElement("span");
+proposalBadge.className = "badge";
+stateSummary.append(countBadge, proposalBadge);
 const stateFilters = document.createElement("p");
+const filtersLabel = document.createElement("span");
+filtersLabel.textContent = "Active filters: ";
+const filtersNone = document.createElement("em");
+filtersNone.textContent = "none";
+const chipBox = document.createElement("span");
+stateFilters.append(filtersLabel, chipBox, filtersNone);
 const stateRows = document.createElement("div");
 stateRows.className = "scroll-panel";
 stateSection.append(stateSummary, stateFilters, stateRows);
-document.body.append(stateSection);
+const stateCard = card("Conversation state", stateSection);
+stateCard.hidden = true;
+autoAnimate(chipBox);
 
 function renderTable(container, columns, rows) {
   const table = document.createElement("table");
@@ -52,26 +81,71 @@ function renderTable(container, columns, rows) {
   container.replaceChildren(table);
 }
 
+const flash = (el) => {
+  el.classList.remove("flash");
+  void el.offsetWidth;
+  el.classList.add("flash");
+};
+const setText = (el, text) => {
+  if (el.textContent !== text) {
+    el.textContent = text;
+    flash(el);
+  }
+};
+
+// Keyed, incremental table so AutoAnimate sees rows leave/enter.
+let rowBody, rowColumns = "", rowByKey = new Map();
+function renderRows(columns, rows) {
+  if (columns.join("\u0000") !== rowColumns) {
+    rowColumns = columns.join("\u0000");
+    rowByKey = new Map();
+    const table = document.createElement("table");
+    const head = table.createTHead().insertRow();
+    for (const column of columns) head.appendChild(document.createElement("th")).textContent = column;
+    rowBody = table.createTBody();
+    autoAnimate(rowBody);
+    stateRows.replaceChildren(table);
+  }
+  const keep = new Set();
+  rows.forEach((row, i) => {
+    const key = columns.map((c) => row[c]).join("\u0000");
+    keep.add(key);
+    let tr = rowByKey.get(key);
+    if (!tr) {
+      tr = document.createElement("tr");
+      for (const column of columns) tr.insertCell().textContent = row[column];
+      rowByKey.set(key, tr);
+    }
+    if (rowBody.children[i] !== tr) rowBody.insertBefore(tr, rowBody.children[i] ?? null);
+  });
+  for (const [key, tr] of rowByKey) {
+    if (!keep.has(key)) {
+      tr.remove();
+      rowByKey.delete(key);
+    }
+  }
+}
+
 function renderState(state) {
-  stateSection.hidden = false;
-  stateSummary.replaceChildren();
-  const count = document.createElement("span");
-  count.className = "badge";
-  count.textContent = `Remaining: ${state.count} / ${state.total}`;
-  const proposal = document.createElement("span");
-  proposal.className = "badge";
-  proposal.textContent = ` · proposalMade: ${state.proposalMade}`;
-  stateSummary.append(count, proposal);
-  stateFilters.replaceChildren("Active filters: ");
+  stateCard.hidden = false;
+  setText(countBadge, `Remaining: ${state.count} / ${state.total}`);
+  setText(proposalBadge, `proposalMade: ${state.proposalMade}`);
+  proposalBadge.classList.toggle("on", state.proposalMade);
   const entries = Object.entries(state.filters);
-  if (!entries.length) stateFilters.append("none");
-  for (const [column, value] of entries) {
+  filtersNone.hidden = entries.length > 0;
+  const want = new Map(entries.map(([c, v]) => [c, `${c}: ${v}`]));
+  for (const chip of [...chipBox.children]) {
+    if (want.get(chip.dataset.column) !== chip.textContent) chip.remove();
+    else want.delete(chip.dataset.column);
+  }
+  for (const [column, text] of want) {
     const chip = document.createElement("span");
     chip.className = "chip";
-    chip.textContent = `${column}: ${value}`;
-    stateFilters.append(chip);
+    chip.dataset.column = column;
+    chip.textContent = text;
+    chipBox.append(chip);
   }
-  renderTable(stateRows, state.columns, state.rows);
+  renderRows(state.columns, state.rows);
 }
 
 let peer;
@@ -328,8 +402,12 @@ upload.textContent = "Upload CSV (replaces table)";
 const uploadStatus = document.createElement("p");
 const panel = document.createElement("div");
 panel.id = "hospitals-panel";
+panel.className = "scroll-panel";
 panel.hidden = true;
-document.body.append(document.createElement("hr"), fileInput, upload, uploadStatus, panel);
+const csvControls = document.createElement("div");
+csvControls.className = "controls";
+csvControls.append(fileInput, upload);
+card("Hospitals CSV", csvControls, uploadStatus, panel);
 
 async function refreshHospitals() {
   const response = await fetch("/api/hospitals");

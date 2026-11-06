@@ -21,3 +21,4 @@
 - `handleUserDecision` is binary: any non-acceptance (including a question about the proposal) is treated as a rejection.
 - `windowStart` indexes the full transcript, so keep `delegation.transcriptTurns` null.
 - State panels show *distinct* remaining rows (the count is distinct too); snapshots are capped at 500 rows and arrive as `event: state` frames on the delegate stream.
+- UI uses Pico.css and AutoAnimate, served locally from `node_modules` at `/vendor/` (run `npm install`).
