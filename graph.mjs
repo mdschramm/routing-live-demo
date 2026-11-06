@@ -40,7 +40,7 @@ function buildGraph({ model, filterModel }) {
   const filterLlm = new ChatOpenAI({ model: filterModel });
 
   const speak = (promptName, { listRows = 0 } = {}) => async (state) => {
-    const system = await getPrompt(promptName);
+    const system = await getPrompt(promptName, { columns: state.filterColumns.join(", ") });
     const context = [
       `Conversation:\n${transcriptText(windowed(state))}`,
       `Matching options (${state.filtered.length} rows):\n${describe(state.filtered, state.filterColumns)}`,
@@ -58,7 +58,7 @@ function buildGraph({ model, filterModel }) {
       // Safety net if /api/conversation/start didn't run first.
       const base = state.allHospitals ? {} : await loadState();
       if (state.proposalMade) return base;
-      const prompt = await getPrompt("router_system");
+      const prompt = await getPrompt("router_system", { columns: (state.filterColumns ?? base.filterColumns).join(", ") });
       const { intent } = await filterLlm
         .withStructuredOutput(z.object({ intent: z.enum(["filter", "question"]) }))
         .invoke([new SystemMessage(prompt), new HumanMessage(transcriptText(windowed(state)))]);

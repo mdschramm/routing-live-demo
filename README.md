@@ -22,3 +22,4 @@
 - `windowStart` indexes the full transcript, so keep `delegation.transcriptTurns` null.
 - State panels show *distinct* remaining rows (the count is distinct too); snapshots are capped at 500 rows and arrive as `event: state` frames on the delegate stream.
 - UI uses Pico.css and AutoAnimate, served locally from `node_modules` at `/vendor/` (run `npm install`).
+- Prompts support `{{columns}}` (the filterable CSV columns), filled in by `getPrompt(name, vars)`; unknown placeholders throw.
