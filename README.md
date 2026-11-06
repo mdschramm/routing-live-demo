@@ -7,6 +7,7 @@
 - [x] Add filtering logic
 - [x] Add a router node: filter requests go to the filter node; general questions about what is available go to an answer node that uses the filtered hospitals in state
 - [x] Add `scripts/add-audio.mjs` (adds an `audio` column and generates TTS clips) and a proposal/decision loop (`proposalMade`, `handleUserDecision`)
+- [x] Live state panels in the page: remaining distinct hospitals (scrollable), active filters, `proposalMade`
 
 ## Graph flow
 `router` -> `filter` -> (`proposal` if all remaining rows are identical, else `ask`); `router` -> `answer` for general questions. After `proposal` sets `proposalMade`, the next turn goes `router` -> `handleUserDecision`: accept sends the clip path to the browser, which plays it separately from the voice agent and ends the call; reject resets `filtered` to all hospitals and ignores earlier transcript turns (`windowStart`). Only `proposal`, `ask`, `answer` and `handleUserDecision` stream text back to the voice agent.
@@ -19,3 +20,4 @@
 - Audio: `node scripts/add-audio.mjs [csv] [--dry-run] [--limit N]` writes clips to `data/audio/` (gitignored) and the `audio` column; the column is excluded from filtering via `hospitals.nonFilterableColumns` in `settings.json`. Clips are served at `/audio/`.
 - `handleUserDecision` is binary: any non-acceptance (including a question about the proposal) is treated as a rejection.
 - `windowStart` indexes the full transcript, so keep `delegation.transcriptTurns` null.
+- State panels show *distinct* remaining rows (the count is distinct too); snapshots are capped at 500 rows and arrive as `event: state` frames on the delegate stream.

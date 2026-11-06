@@ -1,0 +1,56 @@
+State
+- filtered hospitals (initialized to full hospital at conversation start)
+
+util (filteredHospitals) -> (unique names, locations, actions)
+
+
+Information Node:
+
+Filter node
+- uses util to get unique names, locations, and actions
+given currently filtered hospitals
+
+- based on user messages, outputs any name, location, or
+action that has been specified using a structured output for each that is limited to what's in unique names, locations, and actions
+
+- Filters remaining filtered hospitals in state based on that output
+
+- If only one item remains in filtered hospitals -> route to ProposalNode
+
+- Otherwise route to AskNode
+
+ProposalNode
+- Proposes the hospital with all details (streams back to live agent)
+
+Ask Node
+- Looks at remaining hospitals and asks for more filters from the user (streams back to live agent)
+
+
+Todos:
+- Add transfer out to play audio*
+- Add proposed to state, if already proposed and user accepts-transfer, if user denies reset*
+
+
+- informational tests: "I don't know/what's available"
+- Ask for shortest path or biggest differentiator between filteredHospitals
+- Automated testing cli with results shown (https://github.com/svanichkin/say)
+- Show filteredHospitals, count, active filters
+- prettier ui
+
+Extensions to describe
+- reset clause
+- transfer tools and hours
+- many individual customers handling
+- eject/transfer logic
+
+Diagram current architecture
+
+Diagram extended architecture
+
+Behavioral questions and answers ready
+
+Code level descisions:
+- prompts kept separately
+
+
+

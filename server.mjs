@@ -118,11 +118,11 @@ app.post("/api/conversation/start", async (request, response) => {
     return;
   }
   const settings = await loadSettings();
-  const count = await startConversation(request.body.sessionId, {
+  const state = await startConversation(request.body.sessionId, {
     model: process.env.STUB_MODEL ?? settings.model,
     filterModel: settings.filterModel,
   });
-  response.json({ count });
+  response.json({ count: state.total, state });
 });
 
 app.post("/api/delegate", async (request, response) => {
@@ -148,7 +148,8 @@ app.post("/api/delegate", async (request, response) => {
   });
   try {
     for await (const item of runDelegation(transcript, { sessionId, model, filterModel: settings.filterModel, signal: controller.signal })) {
-      if (typeof item === "string") response.write(`data: ${JSON.stringify({ text: item })}\n\n`);
+      if (item.state) response.write(`event: state\ndata: ${JSON.stringify(item.state)}\n\n`);
+      else if (typeof item === "string") response.write(`data: ${JSON.stringify({ text: item })}\n\n`);
       else response.write(`event: end\ndata: ${JSON.stringify({ audio: item.audio })}\n\n`);
     }
     response.write("event: done\ndata: {}\n\n");

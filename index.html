@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GPT-Live connection</title>
     <style>
+      .scroll-panel { max-height: 300px; overflow: auto; border: 1px solid #ccc; margin-top: 8px; }
+      .scroll-panel table, #hospitals-panel table { border-collapse: collapse; width: 100%; font-size: 14px; }
+      .scroll-panel th, .scroll-panel td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; }
+      .scroll-panel th { position: sticky; top: 0; background: #f5f5f5; }
+      .chip { display: inline-block; background: #e8eefc; border-radius: 10px; padding: 2px 8px; margin: 2px; font-size: 13px; }
+      .badge { font-weight: 600; }
       #hospitals-panel { max-height: 300px; overflow: auto; border: 1px solid #ccc; margin-top: 8px; }
       #hospitals-panel table { border-collapse: collapse; width: 100%; font-size: 14px; }
       #hospitals-panel th, #hospitals-panel td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee; }
@@ -23,6 +29,50 @@ const audio = new Audio();
 audio.autoplay = true;
 audio.controls = true;
 document.body.append(start, stop, status, audio);
+
+// ---- Live conversation state panels ----
+const stateSection = document.createElement("div");
+stateSection.hidden = true;
+const stateSummary = document.createElement("p");
+const stateFilters = document.createElement("p");
+const stateRows = document.createElement("div");
+stateRows.className = "scroll-panel";
+stateSection.append(stateSummary, stateFilters, stateRows);
+document.body.append(stateSection);
+
+function renderTable(container, columns, rows) {
+  const table = document.createElement("table");
+  const head = table.createTHead().insertRow();
+  for (const column of columns) head.appendChild(document.createElement("th")).textContent = column;
+  const body = table.createTBody();
+  for (const row of rows) {
+    const tr = body.insertRow();
+    for (const column of columns) tr.insertCell().textContent = row[column];
+  }
+  container.replaceChildren(table);
+}
+
+function renderState(state) {
+  stateSection.hidden = false;
+  stateSummary.replaceChildren();
+  const count = document.createElement("span");
+  count.className = "badge";
+  count.textContent = `Remaining: ${state.count} / ${state.total}`;
+  const proposal = document.createElement("span");
+  proposal.className = "badge";
+  proposal.textContent = ` · proposalMade: ${state.proposalMade}`;
+  stateSummary.append(count, proposal);
+  stateFilters.replaceChildren("Active filters: ");
+  const entries = Object.entries(state.filters);
+  if (!entries.length) stateFilters.append("none");
+  for (const [column, value] of entries) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = `${column}: ${value}`;
+    stateFilters.append(chip);
+  }
+  renderTable(stateRows, state.columns, state.rows);
+}
 
 let peer;
 
@@ -120,6 +170,7 @@ async function handleDelegation(id) {
           endAfter = true;
           endAudio = JSON.parse(data).audio;
         }
+        else if (frame.startsWith("event: state")) renderState(JSON.parse(data));
         else if (frame.startsWith("event: error")) console.error("Delegation error", data);
         else if (data && !frame.startsWith("event: done")) {
           pending += JSON.parse(data).text ?? "";
@@ -180,7 +231,10 @@ start.addEventListener("click", async () => {
       if (event.type === "session.started") {
         sessionId = event.session.id;
         ready = true;
-        post("/api/conversation/start", { sessionId }).catch(console.error);
+        post("/api/conversation/start", { sessionId })
+          .then((r) => r.json())
+          .then((j) => renderState(j.state))
+          .catch(console.error);
         stop.disabled = false;
         status.textContent = "Connected: " + event.session.id;
       } else if (event.type === "session.closed") {
@@ -285,19 +339,7 @@ async function refreshHospitals() {
     return;
   }
   const { columns, rows } = await response.json();
-  const table = document.createElement("table");
-  const head = table.createTHead().insertRow();
-  for (const column of columns) {
-    head.appendChild(document.createElement("th")).textContent = column;
-  }
-  const body = table.createTBody();
-  for (const row of rows) {
-    const tr = body.insertRow();
-    for (const column of columns) {
-      tr.insertCell().textContent = row[column];
-    }
-  }
-  panel.replaceChildren(table);
+  renderTable(panel, columns, rows);
   panel.hidden = false;
   uploadStatus.textContent = uploadStatus.textContent || rows.length + " rows";
 }
