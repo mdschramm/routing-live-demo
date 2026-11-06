@@ -1,9 +1,16 @@
 {
-  "model": "gpt-5-nano",
+  "model": "gpt-4.1-mini",
+  "filterModel": "gpt-4.1-mini",
   "delegation": {
-    "transcriptTurns": 2,
+    "transcriptTurns": null,
     "settleWaitMs": 300,
     "acknowledgementDelayMs": null
   },
-  "transcript": { "saveToFile": true, "dir": "transcripts" }
+  "transcript": {
+    "saveToFile": true,
+    "dir": "transcripts"
+  },
+  "hospitals": {
+    "path": "data/hospitals.csv"
+  }
 }

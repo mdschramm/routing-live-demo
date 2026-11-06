@@ -1,11 +1,13 @@
 import express from "express";
 import OpenAI from "openai";
-import { runDelegation } from "./graph.mjs";
+import { runDelegation, startConversation } from "./graph.mjs";
 import { getPrompt } from "./prompts.mjs";
+import { seedHospitals, saveHospitalsCsv, loadHospitals } from "./hospitals.mjs";
 import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 process.loadEnvFile(".env");
+await seedHospitals();
 
 const app = express();
 const client = new OpenAI({ maxRetries: 0 });
@@ -77,11 +79,61 @@ app.get("/api/settings", async (_request, response) => {
   response.json(await loadSettings());
 });
 
+app.get("/api/hospitals", async (_request, response) => {
+  try {
+    const data = await loadHospitals();
+    if (!data) return void response.status(204).end();
+    response.json(data);
+  } catch (error) {
+    console.error("Hospitals load failed", error.message);
+    response.status(500).json({ error: "Stored hospitals.csv is invalid" });
+  }
+});
+
+app.post(
+  "/api/hospitals",
+  express.text({ type: "text/csv", limit: "1mb" }),
+  async (request, response) => {
+    if (!sameOrigin(request, response)) return;
+    if (typeof request.body !== "string" || !request.body.trim()) {
+      response.status(400).json({ error: "A text/csv body is required" });
+      return;
+    }
+    try {
+      response.json({ count: await saveHospitalsCsv(request.body) });
+    } catch (error) {
+      if (error.status !== 400) throw error;
+      response.status(400).json({ error: error.message });
+    }
+  },
+);
+
+const validSession = (id) => typeof id === "string" && /^[\w-]+$/.test(id);
+
+app.post("/api/conversation/start", async (request, response) => {
+  if (!sameOrigin(request, response)) return;
+  if (!validSession(request.body?.sessionId)) {
+    response.status(400).json({ error: "sessionId is required" });
+    return;
+  }
+  const settings = await loadSettings();
+  const count = await startConversation(request.body.sessionId, {
+    model: process.env.STUB_MODEL ?? settings.model,
+    filterModel: settings.filterModel,
+  });
+  response.json({ count });
+});
+
 app.post("/api/delegate", async (request, response) => {
   if (!sameOrigin(request, response)) return;
-  const turns = request.body?.turns;
-  if (!Array.isArray(turns) || !turns.length || !turns.every((t) => typeof t === "string" && t.trim())) {
-    response.status(400).json({ error: "turns must be a non-empty array of strings" });
+  const { sessionId, transcript } = request.body ?? {};
+  if (
+    !validSession(sessionId) ||
+    !Array.isArray(transcript) ||
+    !transcript.length ||
+    !transcript.every((t) => ["user", "agent"].includes(t?.role) && typeof t.text === "string")
+  ) {
+    response.status(400).json({ error: "sessionId and a non-empty transcript [{role,text}] are required" });
     return;
   }
   const settings = await loadSettings();
@@ -94,7 +146,7 @@ app.post("/api/delegate", async (request, response) => {
     Connection: "keep-alive",
   });
   try {
-    for await (const text of runDelegation(turns, { model, signal: controller.signal })) {
+    for await (const text of runDelegation(transcript, { sessionId, model, filterModel: settings.filterModel, signal: controller.signal })) {
       response.write(`data: ${JSON.stringify({ text })}\n\n`);
     }
     response.write("event: done\ndata: {}\n\n");
