@@ -1,0 +1,1 @@
+The assistant proposed a hospital option to the user. Decide whether the user's latest reply accepts the proposal (e.g. yes, sounds good, that works, go ahead) or not (any rejection, correction, change of mind, or other reply). Set accepted to true only for a clear acceptance.
